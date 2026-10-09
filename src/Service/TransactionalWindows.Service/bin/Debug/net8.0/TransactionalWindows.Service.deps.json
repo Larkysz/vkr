@@ -1,0 +1,39 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "TransactionalWindows.Service/1.0.0": {
+        "dependencies": {
+          "TransactionalWindows.Core": "1.0.0"
+        },
+        "runtime": {
+          "TransactionalWindows.Service.dll": {}
+        }
+      },
+      "TransactionalWindows.Core/1.0.0": {
+        "runtime": {
+          "TransactionalWindows.Core.dll": {
+            "assemblyVersion": "1.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "TransactionalWindows.Service/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "TransactionalWindows.Core/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}
