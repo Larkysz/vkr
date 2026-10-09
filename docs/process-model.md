@@ -60,6 +60,12 @@ graph TD
 
 Diff строится только после отсутствия активных handles, drain callback queue и завершения значимых nodes.
 
+## Текущая реализация Phase 3
+
+В Service это правило реализовано классом `WindowsProcessManager`. Он работает только в режиме `ControlledUnisolated`: создаёт suspended root, назначает его в Job Object, запрещает breakaway, получает членов Job через completion port и polling, а затем сохраняет `ProcessNode` с PID, временем создания, SID, session и подтверждённым членством. `FileTransactionWorkflow` не разрешает Diff, Commit или Discard, пока Job не пуст и история процессов не подтверждена.
+
+Режим `RequireIsolation` намеренно отклоняется до появления minifilter. Поэтому текущая реализация контролирует lifecycle процессов, но не меняет файловую или Registry семантику приложения. После перезапуска durable store сохраняет наблюденные узлы для аудита; живой Job автоматически не присоединяется без нового подтверждённого запуска.
+
 ~~~mermaid
 sequenceDiagram
     participant U as UI

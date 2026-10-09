@@ -9,8 +9,13 @@ public sealed record ProcessNode
     public required int Pid { get; init; }
     public required long ProcessCreationIdentity { get; init; }
     public int? ParentPid { get; init; }
+    public ProcessNodeId? ParentNodeId { get; init; }
     public string? ImagePath { get; init; }
     public string? CommandLine { get; init; }
+    public string? OwnerSid { get; init; }
+    public int? SessionId { get; init; }
+    public bool JobMembershipConfirmed { get; init; }
+    public bool IsRoot { get; init; }
     public required DateTimeOffset StartedAt { get; init; }
     public DateTimeOffset? ExitedAt { get; init; }
     public int? ExitCode { get; init; }

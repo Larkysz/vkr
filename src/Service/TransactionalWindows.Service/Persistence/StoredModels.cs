@@ -1,4 +1,5 @@
 using TransactionalWindows.Core.Domain;
+using System.Text.Json.Serialization;
 
 namespace TransactionalWindows.Service.Persistence;
 
@@ -37,4 +38,5 @@ internal sealed record JournalMutation(
     Diff? Diff,
     bool Archived,
     StoredOperation Operation,
-    StoredEvent Event);
+    StoredEvent Event,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ProcessNode? Process = null);

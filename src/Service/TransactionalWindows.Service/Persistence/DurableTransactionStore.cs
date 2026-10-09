@@ -24,6 +24,7 @@ public sealed class DurableTransactionStore : ITransactionRepository, IDisposabl
     private readonly object _gate = new();
     private readonly Dictionary<TransactionId, Transaction> _transactions = new();
     private readonly Dictionary<TransactionId, Diff> _diffs = new();
+    private readonly Dictionary<ProcessNodeId, ProcessNode> _processes = new();
     private readonly Dictionary<Guid, StoredOperation> _operations = new();
     private readonly List<StoredEvent> _events = new();
     private readonly HashSet<TransactionId> _archived = new();
@@ -120,6 +121,34 @@ public sealed class DurableTransactionStore : ITransactionRepository, IDisposabl
             EnsureUsable();
             if (afterSequence < 0) throw new ArgumentOutOfRangeException(nameof(afterSequence));
             return _events.Where(e => e.Sequence > afterSequence).ToArray();
+        }
+    }
+
+    public IReadOnlyList<ProcessNode> GetProcessTree(TransactionId id)
+    {
+        lock (_gate)
+        {
+            Require(id);
+            return _processes.Values.Where(n => n.TransactionId == id).OrderBy(n => n.StartedAt).ThenBy(n => n.Id.Value).ToArray();
+        }
+    }
+
+    /// <summary>Trusted observer fact. Process state survives restart for audit, never for blind PID attachment.</summary>
+    public void RecordProcess(ProcessNode node)
+    {
+        lock (_gate)
+        {
+            var transaction = Require(node.TransactionId);
+            if (_archived.Contains(transaction.Id)) throw Error(DomainErrorCode.VersionConflict, "Transaction is archived.");
+            if (_processes.TryGetValue(node.Id, out var existing) && existing == node) return;
+            var next = transaction with
+            {
+                Version = transaction.Version + 1,
+                RootProcessNodeId = node.IsRoot ? node.Id : transaction.RootProcessNodeId
+            };
+            Append(next, null, false, Guid.NewGuid(), RequestDigest("Process", node),
+                node.Status is ProcessNodeStatus.Exited or ProcessNodeStatus.Terminated ? "ProcessExited" : "ProcessAttached",
+                transaction.CurrentState, DateTimeOffset.UtcNow, node);
         }
     }
 
@@ -233,17 +262,17 @@ public sealed class DurableTransactionStore : ITransactionRepository, IDisposabl
     }
 
     private DurableCommandResult Append(Transaction transaction, Diff? diff, bool archived, Guid operationId,
-        string requestDigest, string eventName, TransactionState? from, DateTimeOffset at)
+        string requestDigest, string eventName, TransactionState? from, DateTimeOffset at, ProcessNode? process = null)
     {
         var sequence = _sequence + 1;
         var operation = new StoredOperation(operationId, requestDigest, transaction, sequence);
         var domainEvent = new StoredEvent(sequence, Guid.NewGuid(), transaction.Id, operationId,
             eventName, from, transaction.CurrentState, at.ToUniversalTime());
-        var mutation = new JournalMutation(transaction, diff, archived, operation, domainEvent);
+        var mutation = new JournalMutation(transaction, diff, archived, operation, domainEvent, process);
         // Validate before any disk write; replay uses exactly the same consistency checks.
         ValidateMutation(mutation, sequence);
         var payload = JsonSerializer.Serialize(mutation, Json);
-        var envelope = new JournalEnvelope(1, sequence, payload, Hash(payload));
+        var envelope = new JournalEnvelope(process is null ? 1 : 2, sequence, payload, Hash(payload));
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope, Json) + "\n");
         if (bytes.Length > MaxRecordBytes) throw Error(DomainErrorCode.InvalidArgument, "Metadata record exceeds 4 MiB.");
         try
@@ -309,9 +338,10 @@ public sealed class DurableTransactionStore : ITransactionRepository, IDisposabl
         try
         {
             var envelope = JsonSerializer.Deserialize<JournalEnvelope>(bytes, Json) ?? throw Corrupt("Empty envelope.");
-            if (envelope.SchemaVersion != 1 || envelope.Sequence != _sequence + 1 ||
+            if (envelope.SchemaVersion is not (1 or 2) || envelope.Sequence != _sequence + 1 ||
                 envelope.Sha256 != Hash(envelope.Payload)) throw Corrupt("Journal schema, sequence or checksum is invalid.");
             var mutation = JsonSerializer.Deserialize<JournalMutation>(envelope.Payload, Json) ?? throw Corrupt("Empty mutation.");
+            if ((mutation.Process is not null) != (envelope.SchemaVersion == 2)) throw Corrupt("Process journal schema does not match its payload.");
             ValidateMutation(mutation, envelope.Sequence);
             Install(mutation);
         }
@@ -338,7 +368,15 @@ public sealed class DurableTransactionStore : ITransactionRepository, IDisposabl
                 prior.Arguments != transaction.Arguments || prior.WorkingDirectory != transaction.WorkingDirectory ||
                 prior.OverlayRoot != transaction.OverlayRoot || mutation.Event.From != prior.CurrentState)
                 throw Corrupt("Transaction identity or event history changed.");
-            if (mutation.Archived)
+            if (mutation.Process is not null)
+            {
+                ValidateProcess(mutation.Process, prior);
+                var expected = prior with { Version = prior.Version + 1,
+                    RootProcessNodeId = mutation.Process.IsRoot ? mutation.Process.Id : prior.RootProcessNodeId };
+                if (transaction != expected || mutation.Archived || mutation.Diff is not null)
+                    throw Corrupt("Invalid process observation mutation.");
+            }
+            else if (mutation.Archived)
             {
                 if (!IsTerminal(prior.CurrentState) || prior != transaction) throw Corrupt("Invalid archive record.");
             }
@@ -365,12 +403,15 @@ public sealed class DurableTransactionStore : ITransactionRepository, IDisposabl
             throw Corrupt("Referenced Diff is missing.");
         if (transaction.CurrentState == TransactionState.DiffReady && transaction.DiffId is null)
             throw Corrupt("DiffReady has no Diff.");
+        if (!_transactions.ContainsKey(transaction.Id) && mutation.Process is not null)
+            throw Corrupt("Process observation has no existing transaction.");
     }
 
     private void Install(JournalMutation mutation)
     {
         _transactions[mutation.Transaction.Id] = mutation.Transaction;
         if (mutation.Diff is not null) _diffs[mutation.Transaction.Id] = mutation.Diff;
+        if (mutation.Process is not null) _processes[mutation.Process.Id] = mutation.Process;
         if (mutation.Archived) _archived.Add(mutation.Transaction.Id);
         _operations.Add(mutation.Operation.OperationId, mutation.Operation);
         _events.Add(mutation.Event);
@@ -414,6 +455,36 @@ public sealed class DurableTransactionStore : ITransactionRepository, IDisposabl
         if (transaction.Id.Value == Guid.Empty || transaction.SchemaVersion != 1 || transaction.Version < 0 ||
             !Enum.IsDefined(transaction.CurrentState) || string.IsNullOrWhiteSpace(transaction.OwnerSid) ||
             string.IsNullOrWhiteSpace(transaction.ApplicationPath)) throw Corrupt("Invalid transaction schema or identity.");
+    }
+
+    private void ValidateProcess(ProcessNode node, Transaction transaction)
+    {
+        if (node.Id.Value == Guid.Empty || node.TransactionId != transaction.Id || node.Pid <= 0 ||
+            node.ProcessCreationIdentity <= 0 || node.OwnerSid != transaction.OwnerSid || node.SessionId is null ||
+            !node.JobMembershipConfirmed || !Enum.IsDefined(node.Status) ||
+            node.Status is ProcessNodeStatus.Unknown or ProcessNodeStatus.EscapeDetected)
+            throw Corrupt("Invalid process identity, ownership or membership.");
+        if (transaction.CurrentState is not (TransactionState.Starting or TransactionState.Running or TransactionState.Quiescing))
+            throw Corrupt("Process facts require an active transaction.");
+        if (node.IsRoot && transaction.RootProcessNodeId is not null && transaction.RootProcessNodeId != node.Id)
+            throw Corrupt("Transaction already has a different root.");
+        if (node.ParentNodeId is not null && (!_processes.TryGetValue(node.ParentNodeId.Value, out var parent) || parent.TransactionId != node.TransactionId))
+            throw Corrupt("Process parent is outside this transaction.");
+        if (node.Status is ProcessNodeStatus.Exited or ProcessNodeStatus.Terminated)
+        {
+            if (node.ExitedAt is null || node.ExitCode is null || node.ExitedAt < node.StartedAt)
+                throw Corrupt("Terminal process lacks exit facts.");
+        }
+        else if (node.ExitedAt is not null || node.ExitCode is not null) throw Corrupt("Active process has exit facts.");
+        if (_processes.TryGetValue(node.Id, out var prior))
+        {
+            if ((node with { Status = prior.Status, ExitedAt = prior.ExitedAt, ExitCode = prior.ExitCode }) != prior
+                || prior.Status is ProcessNodeStatus.Exited or ProcessNodeStatus.Terminated
+                || (prior.Status == ProcessNodeStatus.Running && node.Status == ProcessNodeStatus.Starting))
+                throw Corrupt("Process identity or terminal state changed.");
+        }
+        else if (node.Status is not (ProcessNodeStatus.Starting or ProcessNodeStatus.Running))
+            throw Corrupt("First process observation must be active.");
     }
 
     private static void ValidateDiff(Diff diff, TransactionId id)

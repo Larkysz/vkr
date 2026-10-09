@@ -31,7 +31,18 @@ public static class Program
     {
         if (args.Length > 0)
         {
-            PersistenceTests.RunChild(args);
+            switch (args[0])
+            {
+                case "persistence-crash-child":
+                    PersistenceTests.RunChild(args);
+                    break;
+                case "process-child":
+                case "process-leaf":
+                    ProcessManagementTests.RunChild(args);
+                    break;
+                default:
+                    throw new ArgumentException($"Unknown test child command: {args[0]}");
+            }
             return;
         }
         var root = Path.Combine(Path.GetTempPath(), "tw-service-tests-" + Guid.NewGuid().ToString("N"));
@@ -132,5 +143,6 @@ public static class Program
 
         Console.WriteLine("Service file overlay tests passed.");
         PersistenceTests.Run();
+        ProcessManagementTests.Run();
     }
 }

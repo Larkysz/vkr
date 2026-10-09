@@ -1,6 +1,8 @@
 using TransactionalWindows.Core.Domain;
 using TransactionalWindows.Core.State;
 using TransactionalWindows.Service.Persistence;
+using TransactionalWindows.Service.Processes;
+using System.Runtime.Versioning;
 
 namespace TransactionalWindows.Service;
 
@@ -14,6 +16,7 @@ public sealed class FileTransactionWorkflow
     public FileOverlaySession Overlay { get; }
     public Diff? CurrentDiff { get; private set; }
     private readonly DurableTransactionStore? _store;
+    private WindowsProcessManager? _processManager;
 
     public FileTransactionWorkflow(Transaction transaction, FileOverlaySession overlay, DurableTransactionStore? store = null)
     {
@@ -42,9 +45,64 @@ public sealed class FileTransactionWorkflow
         Move(TransactionState.Running, at);
     }
 
+    /// <summary>Controlled current-user launch. Ordinary filesystem calls are NOT redirected.</summary>
+    [SupportedOSPlatform("windows")]
+    public ProcessNode StartProcess(WindowsProcessManager processManager, ProcessLaunchMode mode, DateTimeOffset at)
+    {
+        if (mode != ProcessLaunchMode.ControlledUnisolated)
+            throw new ProcessManagementException(ProcessErrorCode.UnsupportedIsolation, "Transparent isolation is not implemented.");
+        Move(TransactionState.Starting, at);
+        _processManager = processManager;
+        try
+        {
+            var root = processManager.StartSuspended(Transaction, mode, _store is null ? null : _store.RecordProcess);
+            if (_store is null) Transaction = Transaction with { RootProcessNodeId = root.Id };
+            Move(TransactionState.Running, at);
+            processManager.Resume(Transaction.Id);
+            SyncProcessVersion();
+            return root;
+        }
+        catch (Exception ex)
+        {
+            try { processManager.TerminateAsync(Transaction.Id, TimeSpan.FromSeconds(5), CancellationToken.None).GetAwaiter().GetResult(); }
+            catch (Exception cleanup) when (cleanup is KeyNotFoundException or ProcessManagementException) { }
+            Move(TransactionState.Failed, DateTimeOffset.UtcNow, "LaunchFailed: " + ex.Message);
+            throw;
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    public async Task<Diff> WaitForProcessesAndBuildDiffAsync(long generation, TimeSpan timeout, bool terminate,
+        CancellationToken cancellationToken)
+    {
+        var manager = _processManager ?? throw new InvalidOperationException("No controlled process launch in this workflow.");
+        Move(TransactionState.Quiescing, DateTimeOffset.UtcNow);
+        try
+        {
+            if (terminate) await manager.TerminateAsync(Transaction.Id, timeout, cancellationToken).ConfigureAwait(false);
+            else await manager.QuiesceAsync(Transaction.Id, timeout, cancellationToken).ConfigureAwait(false);
+            return BuildDiff(generation, DateTimeOffset.UtcNow);
+        }
+        catch (Exception ex)
+        {
+            try { await manager.TerminateAsync(Transaction.Id, TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false); }
+            catch (Exception cleanup) when (cleanup is ProcessManagementException) { }
+            Move(TransactionState.Failed, DateTimeOffset.UtcNow, "ProcessQuiesceFailed: " + ex.Message);
+            throw;
+        }
+    }
+
     public Diff StopAndBuildDiff(long generation, DateTimeOffset at)
     {
+        EnsureProcessesStopped();
         Move(TransactionState.Quiescing, at);
+        return BuildDiff(generation, at);
+    }
+
+    private Diff BuildDiff(long generation, DateTimeOffset at)
+    {
+        EnsureProcessesStopped();
+        SyncProcessVersion();
         var diff = FileDiffEngine.Build(Overlay, generation);
         if (_store is null)
         {
@@ -62,6 +120,7 @@ public sealed class FileTransactionWorkflow
 
     public FileCommitResult Commit(IReadOnlySet<DiffItemId> selected, DateTimeOffset at)
     {
+        EnsureProcessesStopped();
         if (CurrentDiff is null) throw new InvalidOperationException("A Diff must be built before Commit.");
         Move(TransactionState.Committing, at);
         var result = new FileCommitEngine().Commit(Overlay, CurrentDiff, selected);
@@ -84,6 +143,7 @@ public sealed class FileTransactionWorkflow
 
     public void Discard(DateTimeOffset at)
     {
+        EnsureProcessesStopped();
         Move(TransactionState.Discarding, at);
         try { Overlay.Discard(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -95,10 +155,30 @@ public sealed class FileTransactionWorkflow
     }
 
     private void Move(TransactionState target, DateTimeOffset at, string? error = null)
-        => Transaction = _store is null
+    {
+        SyncProcessVersion();
+        Transaction = _store is null
             ? TransactionStateMachine.Transition(Transaction, target, at) with { LastError = error ?? Transaction.LastError }
             : _store.RecordTransition(Transaction.Id, Transaction.OwnerSid, Transaction.Version,
                 target, Guid.NewGuid(), at, error).Transaction;
+    }
+
+    private void SyncProcessVersion()
+    {
+        if (_store is null) return;
+        var current = _store.Get(Transaction.Id)!;
+        if (current.CurrentState != Transaction.CurrentState)
+            throw new InvalidOperationException("Another owner changed the workflow state.");
+        Transaction = current;
+    }
+
+    private void EnsureProcessesStopped()
+    {
+        if (_processManager is null) return;
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        if (!_processManager.IsEmptyAndObserved(Transaction.Id))
+            throw new InvalidOperationException("The controlled process group is still active; Diff/Commit/Discard are blocked.");
+    }
 
     private static bool PathsOverlap(string left, string right)
     {
