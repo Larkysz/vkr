@@ -11,6 +11,13 @@ public sealed record FileChange
     public string? BaselineDigest { get; init; }
     public string? OverlayDigest { get; init; }
     public string? ContentReference { get; init; }
+    public bool BaselineExists { get; init; }
+    public bool OverlayExists { get; init; }
+    public long? BaselineLength { get; init; }
+    public long? OverlayLength { get; init; }
+    public DateTimeOffset? BaselineLastWriteTimeUtc { get; init; }
+    public DateTimeOffset? OverlayLastWriteTimeUtc { get; init; }
+    public ProcessNodeId? SourceProcessNodeId { get; init; }
     public OperationDisposition Disposition { get; init; } = OperationDisposition.Supported;
 }
 

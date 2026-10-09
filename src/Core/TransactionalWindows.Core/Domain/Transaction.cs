@@ -12,9 +12,13 @@ public sealed record Transaction
     public required string OverlayRoot { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
     public DateTimeOffset? StartedAt { get; init; }
+    public DateTimeOffset? QuiescingAt { get; init; }
+    public DateTimeOffset? DiffReadyAt { get; init; }
     public DateTimeOffset? CompletedAt { get; init; }
     public required TransactionState CurrentState { get; init; }
     public ProcessNodeId? RootProcessNodeId { get; init; }
+    public DiffId? DiffId { get; init; }
+    public string? LastError { get; init; }
     public required int SchemaVersion { get; init; }
     public long Version { get; init; }
 

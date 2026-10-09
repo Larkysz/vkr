@@ -24,6 +24,13 @@ public sealed record DiffItem
     public required DiffItemType Type { get; init; }
     public FileChangeId? FileChangeId { get; init; }
     public RegistryChangeId? RegistryChangeId { get; init; }
+    public string? Path { get; init; }
+    public string? OldPath { get; init; }
+    public FileChangeOperation? FileOperation { get; init; }
+    public RegistryChangeOperation? RegistryOperation { get; init; }
+    public string? BaselineDigest { get; init; }
+    public string? OverlayDigest { get; init; }
+    public ProcessNodeId? SourceProcessNodeId { get; init; }
     public required DiffItemStatus Status { get; init; }
     public SelectionState Selection { get; init; }
     public ApplyState ApplyState { get; init; }

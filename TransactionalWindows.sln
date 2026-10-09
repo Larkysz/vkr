@@ -1,4 +1,4 @@
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
@@ -7,6 +7,10 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TransactionalWindows.Service", "src\Service\TransactionalWindows.Service\TransactionalWindows.Service.csproj", "{A4B1E5D1-4E1E-4F1E-9D4A-7A6E2F62A002}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TransactionalWindows.Core.Tests", "tests\TransactionalWindows.Core.Tests\TransactionalWindows.Core.Tests.csproj", "{A4B1E5D1-4E1E-4F1E-9D4A-7A6E2F62A003}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{4E58353C-6624-48C4-84DA-355E9C6F602B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TransactionalWindows.Service.Tests", "tests\TransactionalWindows.Service.Tests\TransactionalWindows.Service.Tests.csproj", "{BE193DF1-6BD4-4805-8A72-17FD6B8E1DF3}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -26,8 +30,15 @@ Global
 		{A4B1E5D1-4E1E-4F1E-9D4A-7A6E2F62A003}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A4B1E5D1-4E1E-4F1E-9D4A-7A6E2F62A003}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A4B1E5D1-4E1E-4F1E-9D4A-7A6E2F62A003}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BE193DF1-6BD4-4805-8A72-17FD6B8E1DF3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BE193DF1-6BD4-4805-8A72-17FD6B8E1DF3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BE193DF1-6BD4-4805-8A72-17FD6B8E1DF3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BE193DF1-6BD4-4805-8A72-17FD6B8E1DF3}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{BE193DF1-6BD4-4805-8A72-17FD6B8E1DF3} = {4E58353C-6624-48C4-84DA-355E9C6F602B}
 	EndGlobalSection
 EndGlobal

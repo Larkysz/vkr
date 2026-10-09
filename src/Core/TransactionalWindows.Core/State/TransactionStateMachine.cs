@@ -30,6 +30,8 @@ public static class TransactionStateMachine
         {
             CurrentState = target,
             StartedAt = target == TransactionState.Running ? at : transaction.StartedAt,
+            QuiescingAt = target == TransactionState.Quiescing ? at : transaction.QuiescingAt,
+            DiffReadyAt = target == TransactionState.DiffReady ? at : transaction.DiffReadyAt,
             CompletedAt = target == TransactionState.Completed ? at : transaction.CompletedAt,
             Version = transaction.Version + 1
         };
