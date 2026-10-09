@@ -1,5 +1,6 @@
 using TransactionalWindows.Core.Domain;
 using TransactionalWindows.Core.State;
+using TransactionalWindows.Service.Persistence;
 
 namespace TransactionalWindows.Service;
 
@@ -12,13 +13,25 @@ public sealed class FileTransactionWorkflow
     public Transaction Transaction { get; private set; }
     public FileOverlaySession Overlay { get; }
     public Diff? CurrentDiff { get; private set; }
+    private readonly DurableTransactionStore? _store;
 
-    public FileTransactionWorkflow(Transaction transaction, FileOverlaySession overlay)
+    public FileTransactionWorkflow(Transaction transaction, FileOverlaySession overlay, DurableTransactionStore? store = null)
     {
         if (transaction.Id != overlay.TransactionId)
             throw new ArgumentException("Transaction and overlay identifiers do not match.", nameof(overlay));
+        if (store is not null)
+        {
+            if (transaction.CurrentState != TransactionState.Created || store.Get(transaction.Id) != transaction)
+                throw new ArgumentException("A durable workflow requires an already persisted Created transaction.", nameof(transaction));
+            if (!string.Equals(Path.GetFullPath(transaction.OverlayRoot), overlay.OverlayRoot, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(Path.GetFullPath(transaction.WorkingDirectory), overlay.BaselineRoot, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Persisted roots do not match the overlay session.", nameof(transaction));
+            if (PathsOverlap(store.Root, overlay.OverlayRoot) || PathsOverlap(store.Root, overlay.BaselineRoot))
+                throw new ArgumentException("Metadata must be stored separately from baseline and overlay.", nameof(store));
+        }
         Transaction = transaction;
         Overlay = overlay;
+        _store = store;
     }
 
     public void Start(DateTimeOffset at)
@@ -33,9 +46,17 @@ public sealed class FileTransactionWorkflow
     {
         Move(TransactionState.Quiescing, at);
         var diff = FileDiffEngine.Build(Overlay, generation);
+        if (_store is null)
+        {
+            Transaction = Transaction with { DiffId = diff.Id };
+            Move(TransactionState.DiffReady, at);
+        }
+        else
+        {
+            Transaction = _store.RecordDiff(Transaction.Id, Transaction.OwnerSid, Transaction.Version,
+                diff, Guid.NewGuid(), at).Transaction;
+        }
         CurrentDiff = diff;
-        Transaction = Transaction with { DiffId = diff.Id };
-        Move(TransactionState.DiffReady, at);
         return diff;
     }
 
@@ -46,13 +67,17 @@ public sealed class FileTransactionWorkflow
         var result = new FileCommitEngine().Commit(Overlay, CurrentDiff, selected);
         if (result.Succeeded)
         {
-            Overlay.Discard();
+            try { Overlay.Discard(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Move(TransactionState.Failed, at, "RecoveryRequired: overlay cleanup failed: " + ex.Message);
+                return result with { Succeeded = false, Error = Transaction.LastError };
+            }
             Move(TransactionState.Completed, at);
         }
         else
         {
-            Transaction = Transaction with { LastError = result.Error };
-            Move(TransactionState.Failed, at);
+            Move(TransactionState.Failed, at, result.Error);
         }
         return result;
     }
@@ -60,11 +85,28 @@ public sealed class FileTransactionWorkflow
     public void Discard(DateTimeOffset at)
     {
         Move(TransactionState.Discarding, at);
-        Overlay.Discard();
+        try { Overlay.Discard(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Move(TransactionState.Failed, at, "RecoveryRequired: overlay cleanup failed: " + ex.Message);
+            throw;
+        }
         Move(TransactionState.Completed, at);
     }
 
-    private void Move(TransactionState target, DateTimeOffset at)
-        => Transaction = TransactionStateMachine.Transition(Transaction, target, at);
+    private void Move(TransactionState target, DateTimeOffset at, string? error = null)
+        => Transaction = _store is null
+            ? TransactionStateMachine.Transition(Transaction, target, at) with { LastError = error ?? Transaction.LastError }
+            : _store.RecordTransition(Transaction.Id, Transaction.OwnerSid, Transaction.Version,
+                target, Guid.NewGuid(), at, error).Transaction;
+
+    private static bool PathsOverlap(string left, string right)
+    {
+        var a = Path.TrimEndingDirectorySeparator(Path.GetFullPath(left));
+        var b = Path.TrimEndingDirectorySeparator(Path.GetFullPath(right));
+        return string.Equals(a, b, StringComparison.OrdinalIgnoreCase)
+            || a.StartsWith(b.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || b.StartsWith(a.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
 
 }

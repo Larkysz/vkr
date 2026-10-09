@@ -27,8 +27,13 @@ static class Assert
 
 public static class Program
 {
-    public static void Main()
+    public static void Main(string[] args)
     {
+        if (args.Length > 0)
+        {
+            PersistenceTests.RunChild(args);
+            return;
+        }
         var root = Path.Combine(Path.GetTempPath(), "tw-service-tests-" + Guid.NewGuid().ToString("N"));
         var baseline = Path.Combine(root, "baseline");
         var overlay = Path.Combine(root, "overlay");
@@ -126,5 +131,6 @@ public static class Program
         }
 
         Console.WriteLine("Service file overlay tests passed.");
+        PersistenceTests.Run();
     }
 }
