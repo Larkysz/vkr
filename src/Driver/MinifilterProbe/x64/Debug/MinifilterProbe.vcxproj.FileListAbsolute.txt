@@ -1,1 +1,0 @@
-C:\Users\vazho\Documents\Codex\2026-10-06\lead-architect-transactional-windows-windows-desktop\src\Driver\MinifilterProbe\x64\Debug\MinifilterProbe.sys
