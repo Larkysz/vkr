@@ -1,0 +1,49 @@
+; TransactionalWindows MinifilterProbe - isolated runtime test package only
+
+[Version]
+Signature = "$WINDOWS NT$"
+Class = ActivityMonitor
+ClassGuid = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
+Provider = %ProviderName%
+DriverVer = 10/10/2026,1.0.0.0
+CatalogFile = MinifilterProbe.cat
+PnpLockdown = 1
+
+[DefaultInstall.NTamd64]
+CopyFiles = DriverCopyFiles
+
+[DefaultInstall.NTamd64.Services]
+AddService = MinifilterProbe,0x00000002,ServiceInstall
+
+[DestinationDirs]
+DriverCopyFiles = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,
+
+[SourceDisksFiles]
+MinifilterProbe.sys = 1
+
+[DriverCopyFiles]
+MinifilterProbe.sys
+
+[DriverAddReg]
+HKR,"Parameters\Instances","DefaultInstance",0x00000000,"MinifilterProbe Instance"
+HKR,"Parameters\Instances\MinifilterProbe Instance","Altitude",0x00000000,"370500"
+HKR,"Parameters\Instances\MinifilterProbe Instance","Flags",0x00010001,0
+
+[ServiceInstall]
+DisplayName = %ServiceDescription%
+Description = %ServiceDescription%
+ServiceBinary = %13%\MinifilterProbe.sys
+Dependencies = FltMgr
+ServiceType = 2
+StartType = 3
+ErrorControl = 1
+LoadOrderGroup = FSFilter Activity Monitor
+AddReg = DriverAddReg
+
+[Strings]
+ProviderName = "TransactionalWindows"
+ServiceDescription = "TransactionalWindows Minifilter Probe"
+DiskName = "TransactionalWindows Minifilter Probe"

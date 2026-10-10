@@ -1,6 +1,25 @@
 #include <fltKernel.h>
 
 static PFLT_FILTER gFilter;
+static volatile LONG gOperationCounts[4];
+static volatile LONG gTraceCount;
+
+static ULONG
+TwGetOperationIndex(_In_ UCHAR MajorFunction)
+{
+    switch (MajorFunction) {
+    case IRP_MJ_CREATE:
+        return 0;
+    case IRP_MJ_WRITE:
+        return 1;
+    case IRP_MJ_SET_INFORMATION:
+        return 2;
+    case IRP_MJ_DIRECTORY_CONTROL:
+        return 3;
+    default:
+        return MAXULONG;
+    }
+}
 
 static FLT_PREOP_CALLBACK_STATUS
 TwObserveOperation(
@@ -9,8 +28,25 @@ TwObserveOperation(
     _Outptr_result_maybenull_ PVOID* CompletionContext
 )
 {
-    UNREFERENCED_PARAMETER(Data);
     UNREFERENCED_PARAMETER(FltObjects);
+
+    ULONG operation = TwGetOperationIndex(Data->Iopb->MajorFunction);
+    if (operation < RTL_NUMBER_OF(gOperationCounts)) {
+        LONG count = InterlockedIncrement(&gOperationCounts[operation]);
+        LONG traceNumber = InterlockedIncrement(&gTraceCount);
+
+        if (traceNumber <= 32) {
+            DbgPrintEx(
+                DPFLTR_IHVDRIVER_ID,
+                DPFLTR_INFO_LEVEL,
+                "[TWProbe] operation=%lu count=%ld pid=%p\n",
+                operation,
+                count,
+                FltGetRequestorProcessId(Data)
+            );
+        }
+    }
+
     *CompletionContext = NULL;
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
@@ -40,6 +76,15 @@ TwUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
     if (gFilter != NULL) {
         FltUnregisterFilter(gFilter);
         gFilter = NULL;
+        DbgPrintEx(
+            DPFLTR_IHVDRIVER_ID,
+            DPFLTR_INFO_LEVEL,
+            "[TWProbe] totals create=%ld write=%ld setinfo=%ld directory=%ld\n",
+            gOperationCounts[0],
+            gOperationCounts[1],
+            gOperationCounts[2],
+            gOperationCounts[3]
+        );
     }
 
     return STATUS_SUCCESS;

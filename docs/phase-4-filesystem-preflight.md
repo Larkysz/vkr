@@ -1,38 +1,46 @@
-# Phase 4 preflight: проверка native toolchain
+# Phase 4 filesystem preflight
 
-**PREFLIGHT STATUS: BUILD PASS; FS-GATE-01 RUNTIME TESTS NOT STARTED**
+**STATUS: PACKAGE BUILD PASS; DRIVER RUNTIME TEST BLOCKED ON ISOLATED WINDOWS**
 
-Проверка выполнена 2026-10-10 на Windows 11 Home x64, build 26200. Инструменты обнаружены в каталогах установки, хотя `cl.exe` и `MSBuild.exe` не находятся в `PATH`.
+Проверка выполнена 2026-10-10 на Windows 11 Home x64, build 26200. WDK package собран; основной Windows не менялась: драйвер не устанавливался и не загружался, test-signing и boot configuration не менялись.
 
-| Компонент | Найдено | Статус |
-| --- | --- | --- |
-| Visual Studio | Community 2026, 18.10.12224.181 | PASS |
-| MSVC | 14.51.36231, `Hostx64\x64\cl.exe` | PASS |
-| MSBuild | Visual Studio 18.10.1 | PASS |
-| Windows SDK | 10.0.28000.0 | PASS |
-| WDK | 10.0.28000.0; `fltKernel.h`, `fltMgr.lib` и kernel-mode MSBuild rules | PASS |
-| Probe minifilter | `MinifilterProbe.sys` собран и подписан локальной test-signing конфигурацией WDK | PASS, compile/link only |
+| Проверка | Результат |
+| --- | --- |
+| Visual Studio Community 2026 / MSVC x64 | PASS; WDK toolset 10.0.28000.0 |
+| Windows SDK и WDK | PASS; версия 10.0.28000.0 |
+| 64-bit Visual Studio MSBuild | PASS; 18.10.1 |
+| MinifilterProbe C compile/link | PASS; 0 warnings, 0 errors |
+| INF check with x64 InfVerif /w and /h | PASS; INF is valid |
+| INF2Cat package signability | PASS; no errors, no warnings |
+| Local WDK test signing | PASS; current machine does not trust the generated test root |
+| Filesystem harness syntax | PASS |
+| Filesystem harness operations on a scratch folder | PASS: create, read, overwrite, rename, enumerate, delete |
+| Driver install/load/unload on isolated Windows | NOT RUN; no separate recoverable Windows/VM was found |
+| Driver callback evidence | NOT RUN |
+| FS-GATE-01 overlay semantics | OPEN |
 
-## Проверочный драйвер
+## Package contents
 
-`src/Driver/MinifilterProbe` содержит небольшой minifilter для проверки сборки: регистрирует no-op callbacks на create, write, set-information и directory-control; запрашивает attach только к NTFS. Он не меняет файловые операции, не является overlay, не имеет INF/service installation manifest и не включён в основную solution. `.sys` создаётся в локальной build-папке проекта, исключённой Git через `bin/`.
+The MinifilterProbe directory contains an observation-only minifilter and an installable test package. It requests attachment only to NTFS and registers callbacks for create/open, write, set-information and directory-control. The callback increments in-memory counters and emits at most 32 short messages with DbgPrintEx; the probe never blocks, redirects or changes an I/O request. It is not an overlay and does not prove COW, tombstones, rename behavior or QueryDirectory merging.
 
-Сборка выполнена Visual Studio MSBuild 18.10.1 с `WindowsKernelModeDriver10.0`, x64, WDK 10.0.28000.0. Результат: compile/link успешны, WDK локально подписал бинарный файл; INF2Cat пропущен, потому что INF намеренно отсутствует. В проект не добавлялись команды установки, загрузки, фильтр-подключения, test-signing режима Windows или изменения boot configuration.
+The INF specifies PnpLockdown=1, uses the isolated driver store (DIRID 13), declares the FltMgr dependency and writes minifilter instance settings under the service Parameters key. InfVerif.exe from the installed x64 WDK validated the source INF with both /w and /h. Inf2Cat.exe generated the catalog with no errors or warnings. WDK locally test-signed the driver and catalog; SignTool confirms the signatures are present but cannot build trust because their test root is not trusted on this machine. This is expected for a local test certificate and is not production signing.
 
-## Что ещё нужно для FS-GATE-01
+The ordinary MSBuild host is 32-bit and its WDK package verification task fails to load x86/InfVerif.dll, which is absent from this WDK installation. Building the same project with the installed amd64/MSBuild.exe completes successfully and runs the package tasks. This is an environment/tool-host issue; the x64 INF verifier and package checks themselves pass.
 
-Этот preflight подтверждает инструментарий, но не работу filesystem overlay и не закрывает FS-GATE-01. Для следующего runtime spike нужен отдельный тестовый компьютер или отдельная тестовая Windows, которую можно восстановить после сбоя. Там отдельно проверяются загрузка/выгрузка фильтра, порядок attach/detach, безопасный fail-closed behavior и тестовые случаи namespace из [architecture-audit.md](architecture-audit.md) и [filesystem-overlay.md](filesystem-overlay.md).
+## Altitude and test safety
 
-Текущий probe сам по себе эти сценарии не реализует. Перед выдачей тестовой VM/машины настраиваются её владелец и recovery procedure; режим test signing и установка любого драйвера выполняются только в этой тестовой среде.
+The package currently contains altitude 370500 only as a temporary laboratory placeholder. Microsoft assigns filter altitudes to products and load-order groups; this value has not been assigned to this project or checked for collision with filters on a test machine. Do not install the package while the placeholder remains unreviewed. Before runtime testing, use a disposable Windows with a recovery point, inspect existing filter altitudes there, and choose a unique test altitude for that environment. Never enable test signing or change boot settings on the development Windows for this probe.
 
-## Изменения preflight
+The current machine has no available Hyper-V PowerShell module or registered local VM, and no VMware/VirtualBox/QEMU executable was found. Access to fltmc filters was denied in the current non-elevated session. Therefore actual filter installation, load, attach, unload and callback collection remain pending. No attempt was made to elevate or make system changes.
 
-- `src/Driver/MinifilterProbe/MinifilterProbe.vcxproj`
-- `src/Driver/MinifilterProbe/MinifilterProbe.c`
-- `src/Driver/MinifilterProbe/README.md`
-- `src/Driver/README.md`
-- `tools/check-environment.ps1`
-- `docs/development-environment.md`
-- `docs/phase-4-filesystem-preflight.md`
+## Filesystem harness
 
-Это не завершённая Phase 4 и не начало production overlay. Следующая кодовая задача остаётся FS feasibility harness, только после подготовки отдельной восстанавливаемой тестовой Windows и уточнения критериев загрузочного испытания.
+The script tools/run-filesystem-probe.ps1 with parameter -Root and an existing dedicated test directory creates a unique scratch child under the supplied directory, requires a fixed local NTFS volume, rejects a UNC path, drive root and reparse-point root, and checks before deleting only that scratch child. It tests ordinary host filesystem operations. It must only be used on the isolated Windows after the observation driver is loaded; it creates no overlay and does not exercise the transaction system.
+
+The harness was run locally against the repository directory, where it created and removed its uniquely named scratch folder. All six checks passed. The filter was not loaded, so these results validate the harness only, not driver callbacks.
+
+## Next gate
+
+FS-GATE-01 remains open. The next work requires a disposable/recoverable Windows test installation and a non-colliding laboratory altitude. In that environment, first record install/load/attach/unload evidence and confirm callback counters change during the filesystem harness. Only after that should the separate namespace feasibility cases be run for copy-on-write, delete/tombstone, rename and QueryDirectory behavior. Do not implement a production overlay, Service-driver IPC, Registry interception, WPF or commit engine as part of this spike.
+
+Microsoft reference: https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/minifilter-altitude-request

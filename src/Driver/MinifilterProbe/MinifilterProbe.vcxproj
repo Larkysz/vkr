@@ -50,6 +50,12 @@
   <ItemGroup>
     <ClCompile Include="MinifilterProbe.c" />
   </ItemGroup>
+  <ItemGroup>
+    <Inf Include="MinifilterProbe.inf" />
+  </ItemGroup>
+  <ItemGroup>
+    <FilesToPackage Include="$(TargetPath)" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>
